@@ -26,6 +26,14 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "./plugins/withHardwareSOS"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "43a85bf1-3b25-41e2-98f2-54c4fb06b293"
+      }
     }
   }
 }

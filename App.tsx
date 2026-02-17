@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,43 +7,173 @@ import {
   useColorScheme,
   SafeAreaView,
   StatusBar,
-  Platform
+  AppState,
+  Linking,
+  Alert,
+  Animated,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Colors } from './constants/Colors';
 import { Pulsar } from './components/Pulsar';
-import { Heart } from 'lucide-react-native';
+import { Heart, Settings as SettingsIcon, Clock } from 'lucide-react-native';
+import { StorageService } from './services/StorageService';
+import { FirebaseService } from './services/FirebaseService';
+import { Connect } from './components/Connect';
+import { History } from './components/History';
+
+type ViewState = 'pulse' | 'connect' | 'history';
 
 export default function App() {
   const colorScheme = useColorScheme() ?? 'light';
   const theme = Colors[colorScheme];
-  const [isPartnerActive, setIsPartnerActive] = useState(true);
-  const [lastNudge, setLastNudge] = useState<Date | null>(null);
 
-  const handleNudge = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setLastNudge(new Date());
-    // In a real app, this would send a ping to the backend
+  const [currentView, setCurrentView] = useState<ViewState>('pulse');
+  const [isPartnerActive, setIsPartnerActive] = useState(false);
+  const [lastNudgeDate, setLastNudgeDate] = useState<Date | null>(null);
+  const [isPaired, setIsPaired] = useState(false);
+
+  const appState = useRef(AppState.currentState);
+  const sosCounter = useRef(0);
+  const lastClickTime = useRef(0);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    initializeApp();
+
+    // Check pairing status every 5 seconds to update UI
+    const interval = setInterval(checkPairing, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const initializeApp = async () => {
+    await checkPairing();
+    setupAppStateListener();
+    setupRealtimeListeners();
+    FirebaseService.updateStatus('online');
   };
+
+  const checkPairing = async () => {
+    const partner = await StorageService.getPartnerId();
+    setIsPaired(!!partner);
+  };
+
+  const setupAppStateListener = () => {
+    const subscription = AppState.addEventListener('change', async (nextAppState) => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        FirebaseService.updateStatus('online');
+      } else if (nextAppState.match(/inactive|background/)) {
+        FirebaseService.updateStatus('locked');
+      }
+      appState.current = nextAppState;
+    });
+    return () => subscription.remove();
+  };
+
+  const setupRealtimeListeners = async () => {
+    const partnerId = await StorageService.getPartnerId();
+    if (partnerId) {
+      FirebaseService.subscribeToPartner(partnerId, (data) => {
+        if (data) {
+          setIsPartnerActive(data.state === 'online');
+        }
+      });
+    }
+
+    FirebaseService.subscribeToNudges(() => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setLastNudgeDate(new Date());
+    });
+  };
+
+  const handleNudge = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setLastNudgeDate(new Date());
+    await FirebaseService.sendNudge();
+  };
+
+  const handleSOS = async () => {
+    const now = Date.now();
+    if (now - lastClickTime.current < 800) {
+      sosCounter.current += 1;
+    } else {
+      sosCounter.current = 1;
+    }
+    lastClickTime.current = now;
+
+    if (sosCounter.current >= 3) {
+      sosCounter.current = 0;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+
+      const sosNumber = '9704492430';
+
+      Alert.alert(
+        'EMERGENCY SOS',
+        `Calling ${sosNumber}...`,
+        [{ text: 'Cancel', style: 'cancel' }],
+        { cancelable: true }
+      );
+
+      FirebaseService.updateStatus('sos');
+      Linking.openURL(`tel:${sosNumber}`);
+    }
+  };
+
+  const switchView = (view: ViewState) => {
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setCurrentView(view);
+      checkPairing();
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  if (currentView === 'connect') {
+    return <Connect onBack={() => switchView('pulse')} theme={theme} />;
+  }
+
+  if (currentView === 'history') {
+    return <History onBack={() => switchView('pulse')} theme={theme} />;
+  }
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
       <StatusBar barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'} />
-      <View style={styles.container}>
+      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+        <View style={styles.topNav}>
+          <TouchableOpacity onPress={() => switchView('history')} style={styles.navButton}>
+            <Clock size={24} color={theme.text} opacity={0.6} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => switchView('connect')} style={styles.navButton}>
+            <SettingsIcon size={24} color={theme.text} opacity={0.6} />
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.header}>
           <Text style={[styles.title, { color: theme.text }]}>Pulse</Text>
-          <Text style={[styles.subtitle, { color: theme.text, opacity: 0.6 }]}>
-            Stay connected
+          <Text style={[styles.subtitle, { color: theme.text, opacity: 0.5 }]}>
+            {isPaired ? 'Bridged with Partner' : 'Seek a Heart to Sync'}
           </Text>
         </View>
 
         <View style={styles.pulseContainer}>
-          <Pulsar active={isPartnerActive} color={theme.accent} />
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={handleSOS}
+          >
+            <Pulsar active={isPartnerActive} color={theme.accent} />
+          </TouchableOpacity>
           <View style={styles.statusBox}>
             <Text style={[styles.statusText, { color: theme.text }]}>
-              {isPartnerActive ? 'Parter is active now' : 'Partner was away'}
+              {isPartnerActive ? 'Partner is Active' : 'Partner is Away'}
             </Text>
-            <View style={[styles.dot, { backgroundColor: isPartnerActive ? '#4CAF50' : '#FFA000' }]} />
+            <View style={[styles.dot, { backgroundColor: isPartnerActive ? '#4CAF50' : '#888' }]} />
           </View>
         </View>
 
@@ -53,24 +183,21 @@ export default function App() {
             onPress={handleNudge}
             activeOpacity={0.7}
           >
-            <Heart size={20} color={theme.text} />
-            <Text style={[styles.buttonText, { color: theme.text }]}>Send a Nudge</Text>
+            <Heart size={20} color={theme.accent} fill={theme.accent + '33'} />
+            <Text style={[styles.buttonText, { color: theme.text }]}>Send Nudge</Text>
           </TouchableOpacity>
 
-          {lastNudge && (
-            <Text style={[styles.lastNudgeText, { color: theme.text, opacity: 0.5 }]}>
-              Last nudge sent at {lastNudge.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {lastNudgeDate && (
+            <Text style={[styles.lastNudgeText, { color: theme.text, opacity: 0.4 }]}>
+              Last Pulse: {lastNudgeDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </Text>
           )}
-        </View>
 
-        <TouchableOpacity
-          onPress={() => setIsPartnerActive(!isPartnerActive)}
-          style={styles.toggle}
-        >
-          <Text style={{ color: theme.text, opacity: 0.3, fontSize: 10 }}>[Dev Toggle Status]</Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={[styles.sosHint, { color: theme.text, opacity: 0.2 }]}>
+            Privacy Preserved • Connection Secured
+          </Text>
+        </View>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -85,17 +212,28 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 50,
   },
+  topNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  navButton: {
+    padding: 10,
+    marginHorizontal: -10,
+  },
   header: {
     alignItems: 'center',
   },
   title: {
-    fontSize: 32,
-    fontWeight: '300',
-    letterSpacing: 1,
+    fontSize: 34,
+    fontWeight: '200',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
   },
   subtitle: {
-    fontSize: 14,
-    marginTop: 5,
+    fontSize: 13,
+    marginTop: 8,
+    letterSpacing: 0.5,
   },
   pulseContainer: {
     alignItems: 'center',
@@ -105,20 +243,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 40,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.03)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 25,
   },
   statusText: {
     fontSize: 14,
-    marginRight: 8,
+    marginRight: 10,
     fontWeight: '400',
   },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   footer: {
     alignItems: 'center',
@@ -126,27 +264,29 @@ const styles = StyleSheet.create({
   button: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 25,
-    paddingVertical: 15,
-    borderRadius: 30,
+    paddingHorizontal: 30,
+    paddingVertical: 18,
+    borderRadius: 35,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
-    shadowRadius: 10,
+    shadowRadius: 15,
     elevation: 2,
   },
   buttonText: {
-    marginLeft: 10,
+    marginLeft: 12,
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   lastNudgeText: {
-    marginTop: 15,
+    marginTop: 18,
     fontSize: 12,
   },
-  toggle: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
+  sosHint: {
+    marginTop: 25,
+    fontSize: 9,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   }
 });
