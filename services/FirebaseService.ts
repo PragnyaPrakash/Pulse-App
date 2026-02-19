@@ -4,20 +4,24 @@ import { StorageService } from './StorageService';
 
 // Firebase configuration (Placeholder - User needs to fill this or I use a test one)
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "pulseapp-test.firebaseapp.com",
-    databaseURL: "https://pulseapp-test-default-rtdb.firebaseio.com",
-    projectId: "pulseapp-test",
-    storageBucket: "pulseapp-test.appspot.com",
-    messagingSenderId: "123456789",
-    appId: "1:123456789:web:abcdef"
+    apiKey: "AIzaSyD1Ff56sNbDq9YM50VQup9D9M5qdyeGe4U",
+    authDomain: "web-app-77a30.firebaseapp.com",
+    databaseURL: "https://web-app-77a30-default-rtdb.firebaseio.com",
+    projectId: "web-app-77a30",
+    storageBucket: "web-app-77a30.firebasestorage.app",
+    messagingSenderId: "648289185701",
+    appId: "1:648289185701:web:972e48af92fc095e86424c",
+    measurementId: "G-FCG5K5M2D8"
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 // Connectivity status
-let isFirebaseInitialized = firebaseConfig.apiKey !== "YOUR_API_KEY";
+let isFirebaseInitialized = firebaseConfig.apiKey !== "AIzaSyD1Ff56sNbDq9YM50VQup9D9M5qdyeGe4U" || firebaseConfig.projectId !== "pulseapp-test";
+// Note: Since you just pasted the keys, I am setting this to true.
+isFirebaseInitialized = true;
+
 
 export const FirebaseService = {
     isConfigured() {
