@@ -88,14 +88,17 @@ export default function App() {
       nudgeUnsub = await FirebaseService.subscribeToNudges(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setLastNudgeDate(new Date());
+        // Clear queue after handling
+        FirebaseService.clearNudges();
       });
     };
 
-    if (isPaired) {
+    if (isPaired && FirebaseService.isConfigured()) {
       setupListeners();
     } else {
       setIsPartnerActive(false);
     }
+
 
     return () => {
       if (statusUnsub) statusUnsub();
@@ -175,11 +178,17 @@ export default function App() {
         </View>
 
         <View style={styles.header}>
-          <Text style={[styles.title, { color: theme.text }]}>Pulse</Text>
+          <View style={styles.titleRow}>
+            <Text style={[styles.title, { color: theme.text }]}>Pulse</Text>
+            <View style={[styles.syncIndicator, { backgroundColor: FirebaseService.isConfigured() ? '#4CAF50' : '#FF9800' }]} />
+          </View>
           <Text style={[styles.subtitle, { color: theme.text, opacity: 0.5 }]}>
-            {isPaired ? 'Bridged with Partner' : 'Seek a Heart to Sync'}
+            {!FirebaseService.isConfigured()
+              ? 'Action Required: Setup Firebase Keys'
+              : isPaired ? 'Bridged with Partner' : 'Seek a Heart to Sync'}
           </Text>
         </View>
+
 
         <View style={styles.pulseContainer}>
           <TouchableOpacity
@@ -243,12 +252,25 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: {
     fontSize: 34,
     fontWeight: '200',
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
+  syncIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginLeft: 10,
+    marginTop: -8,
+  },
+
   subtitle: {
     fontSize: 13,
     marginTop: 8,

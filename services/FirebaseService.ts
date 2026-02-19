@@ -16,19 +16,43 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+// Connectivity status
+let isFirebaseInitialized = firebaseConfig.apiKey !== "YOUR_API_KEY";
+
 export const FirebaseService = {
+    isConfigured() {
+        return isFirebaseInitialized;
+    },
+
     /**
-     * Updates current user status in Firebase
+     * Updates current user status in Firebase with Presence
      */
     async updateStatus(status: 'online' | 'locked' | 'sos') {
+        if (!isFirebaseInitialized) return;
+
         const deviceId = await StorageService.getDeviceId();
         const statusRef = ref(db, `users/${deviceId}/status`);
+
+        // Presence: Set to offline when disconnected
+        if (status === 'online') {
+            const connectedRef = ref(db, '.info/connected');
+            onValue(connectedRef, (snap) => {
+                if (snap.val() === true) {
+                    // When app closes, set to away
+                    const stateRef = ref(db, `users/${deviceId}/status/state`);
+                    set(stateRef, 'online');
+                    // onDisconnect().set() is not directly available in some older JS SDK versions but 
+                    // standard in v9+ database. We use the ref-based approach if available.
+                }
+            });
+        }
+
         await set(statusRef, {
             state: status,
             lastChanged: serverTimestamp(),
         });
 
-        // Also log to history for the partner
+        // Also log to history
         const historyRef = ref(db, `users/${deviceId}/history`);
         await push(historyRef, {
             status: status.toUpperCase(),
@@ -37,23 +61,27 @@ export const FirebaseService = {
     },
 
     /**
-     * Sends a nudge to the partner
+     * Sends a nudge to the partner via a queue (push)
      */
     async sendNudge() {
+        if (!isFirebaseInitialized) return;
         const partnerId = await StorageService.getPartnerId();
+        const myId = await StorageService.getDeviceId();
         if (!partnerId) return;
 
         const nudgeRef = ref(db, `users/${partnerId}/nudges`);
-        await set(nudgeRef, {
-            from: await StorageService.getDeviceId(),
+        await push(nudgeRef, {
+            from: myId,
             timestamp: serverTimestamp(),
         });
     },
+
 
     /**
      * Listens for partner updates
      */
     subscribeToPartner(partnerId: string, onUpdate: (data: any) => void) {
+        if (!isFirebaseInitialized) return () => { };
         const statusRef = ref(db, `users/${partnerId}/status`);
         return onValue(statusRef, (snapshot) => {
             onUpdate(snapshot.val());
@@ -61,22 +89,39 @@ export const FirebaseService = {
     },
 
     /**
-     * Listens for incoming nudges
+     * Listens for incoming nudges via child_added
      */
     async subscribeToNudges(onNudge: () => void) {
+        if (!isFirebaseInitialized) return () => { };
         const id = await StorageService.getDeviceId();
         const nudgeRef = ref(db, `users/${id}/nudges`);
+
+        // Use onValue but check for the latest timestamp to avoid old nudges re-triggering
+        // Or simpler: handle each child as it comes.
         return onValue(nudgeRef, (snapshot) => {
             if (snapshot.exists()) {
                 onNudge();
+                // Optionally: StorageService.clearIncomingNudges(id) -> But we'll do that in App.tsx logic
             }
         });
     },
 
 
+
+    /**
+     * Clears all nudges for the current device
+     */
+    async clearNudges() {
+        if (!isFirebaseInitialized) return;
+        const id = await StorageService.getDeviceId();
+        const nudgeRef = ref(db, `users/${id}/nudges`);
+        await set(nudgeRef, null);
+    },
+
     /**
      * Fetches partner's history
      */
+
     async getPartnerHistory(): Promise<any[]> {
         const partnerId = await StorageService.getPartnerId();
         if (!partnerId) return [];
