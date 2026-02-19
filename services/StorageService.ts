@@ -24,8 +24,10 @@ export const StorageService = {
     },
 
     async setPartnerId(id: string): Promise<void> {
-        await AsyncStorage.setItem(STORAGE_KEYS.PARTNER_ID, id);
+        const sanitizedId = (id || '').trim();
+        await AsyncStorage.setItem(STORAGE_KEYS.PARTNER_ID, sanitizedId);
     },
+
 
     async getSosNumber(): Promise<string | null> {
         return await AsyncStorage.getItem(STORAGE_KEYS.SOS_NUMBER);

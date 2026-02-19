@@ -99,16 +99,25 @@ export const FirebaseService = {
         if (!isFirebaseInitialized) return () => { };
         const id = await StorageService.getDeviceId();
         const nudgeRef = ref(db, `users/${id}/nudges`);
+        const sessionStart = Date.now();
 
-        // Use onValue but check for the latest timestamp to avoid old nudges re-triggering
-        // Or simpler: handle each child as it comes.
+        console.log(`[Firebase] Listening for nudges at users/${id}/nudges`);
+
         return onValue(nudgeRef, (snapshot) => {
             if (snapshot.exists()) {
-                onNudge();
-                // Optionally: StorageService.clearIncomingNudges(id) -> But we'll do that in App.tsx logic
+                const data = snapshot.val();
+                const latestKey = Object.keys(data).pop();
+                const latestNudge = latestKey ? data[latestKey] : null;
+
+                // Only trigger if the nudge is new (within the last 10 seconds or since session start)
+                if (latestNudge && latestNudge.timestamp > sessionStart - 10000) {
+                    console.log("[Firebase] New nudge received!");
+                    onNudge();
+                }
             }
         });
     },
+
 
 
 
@@ -120,6 +129,7 @@ export const FirebaseService = {
         const id = await StorageService.getDeviceId();
         const nudgeRef = ref(db, `users/${id}/nudges`);
         await set(nudgeRef, null);
+        console.log(`[FirebaseService] Nudges cleared for device ${id}.`);
     },
 
     /**
@@ -127,13 +137,22 @@ export const FirebaseService = {
      */
 
     async getPartnerHistory(): Promise<any[]> {
+        if (!isFirebaseInitialized) {
+            console.warn("[FirebaseService] Not initialized, cannot fetch partner history.");
+            return [];
+        }
         const partnerId = await StorageService.getPartnerId();
-        if (!partnerId) return [];
+        if (!partnerId) {
+            console.warn("[FirebaseService] Partner ID not found, cannot fetch partner history.");
+            return [];
+        }
 
+        console.log(`[FirebaseService] Fetching history for partner ${partnerId}.`);
         const historyRef = ref(db, `users/${partnerId}/history`);
         const snapshot = await get(historyRef);
         if (snapshot.exists()) {
             const data = snapshot.val();
+            console.log(`[FirebaseService] Partner ${partnerId} history fetched:`, data);
             return Object.values(data).reverse();
         }
         return [];

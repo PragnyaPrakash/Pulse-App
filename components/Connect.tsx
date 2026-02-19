@@ -59,10 +59,12 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
             Alert.alert('Invalid ID', 'Please enter a valid Device ID.');
             return;
         }
-        await StorageService.setPartnerId(partnerIdInput);
+        const sanitizedId = partnerIdInput.trim();
+        await StorageService.setPartnerId(sanitizedId);
         setIsPaired(true);
         Alert.alert('Synchronized!', 'Your Pulse is now connected.');
     };
+
 
     const handleUnpair = async () => {
         Alert.alert(

@@ -180,6 +180,7 @@ export default function App() {
         <View style={styles.header}>
           <View style={styles.titleRow}>
             <Text style={[styles.title, { color: theme.text }]}>Pulse</Text>
+
             <View style={[styles.syncIndicator, { backgroundColor: FirebaseService.isConfigured() ? '#4CAF50' : '#FF9800' }]} />
           </View>
           <Text style={[styles.subtitle, { color: theme.text, opacity: 0.5 }]}>

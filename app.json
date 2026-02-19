@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "PulseApp",
-    "slug": "PulseApp",
+    "name": "Pulse",
+    "slug": "Pulse",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
