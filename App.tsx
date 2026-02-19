@@ -48,9 +48,9 @@ export default function App() {
   const initializeApp = async () => {
     await checkPairing();
     setupAppStateListener();
-    setupRealtimeListeners();
     FirebaseService.updateStatus('online');
   };
+
 
   const checkPairing = async () => {
     const partner = await StorageService.getPartnerId();
@@ -69,21 +69,40 @@ export default function App() {
     return () => subscription.remove();
   };
 
-  const setupRealtimeListeners = async () => {
-    const partnerId = await StorageService.getPartnerId();
-    if (partnerId) {
-      FirebaseService.subscribeToPartner(partnerId, (data) => {
-        if (data) {
-          setIsPartnerActive(data.state === 'online');
-        }
+  useEffect(() => {
+    let statusUnsub: (() => void) | null = null;
+    let nudgeUnsub: (() => void) | null = null;
+
+    const setupListeners = async () => {
+      const partnerId = await StorageService.getPartnerId();
+      if (partnerId) {
+        statusUnsub = FirebaseService.subscribeToPartner(partnerId, (data) => {
+          if (data && data.state) {
+            setIsPartnerActive(data.state === 'online');
+          } else {
+            setIsPartnerActive(false);
+          }
+        });
+      }
+
+      nudgeUnsub = await FirebaseService.subscribeToNudges(() => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setLastNudgeDate(new Date());
       });
+    };
+
+    if (isPaired) {
+      setupListeners();
+    } else {
+      setIsPartnerActive(false);
     }
 
-    FirebaseService.subscribeToNudges(() => {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setLastNudgeDate(new Date());
-    });
-  };
+    return () => {
+      if (statusUnsub) statusUnsub();
+      if (nudgeUnsub) nudgeUnsub();
+    };
+  }, [isPaired]);
+
 
   const handleNudge = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

@@ -63,16 +63,16 @@ export const FirebaseService = {
     /**
      * Listens for incoming nudges
      */
-    subscribeToNudges(onNudge: () => void) {
-        StorageService.getDeviceId().then(id => {
-            const nudgeRef = ref(db, `users/${id}/nudges`);
-            onValue(nudgeRef, (snapshot) => {
-                if (snapshot.exists()) {
-                    onNudge();
-                }
-            });
+    async subscribeToNudges(onNudge: () => void) {
+        const id = await StorageService.getDeviceId();
+        const nudgeRef = ref(db, `users/${id}/nudges`);
+        return onValue(nudgeRef, (snapshot) => {
+            if (snapshot.exists()) {
+                onNudge();
+            }
         });
     },
+
 
     /**
      * Fetches partner's history
