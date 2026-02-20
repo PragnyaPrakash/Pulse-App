@@ -55,8 +55,8 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
     };
 
     const handlePair = async () => {
-        if (partnerIdInput.length < 10) {
-            Alert.alert('Invalid ID', 'Please enter a valid Device ID.');
+        if (partnerIdInput.length !== 6) {
+            Alert.alert('Invalid ID', 'Please enter a 6-character Device ID.');
             return;
         }
         const sanitizedId = partnerIdInput.trim();

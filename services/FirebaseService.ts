@@ -40,13 +40,17 @@ export const FirebaseService = {
         // Presence: Set to offline when disconnected
         if (status === 'online') {
             const connectedRef = ref(db, '.info/connected');
+            const { onDisconnect } = require('firebase/database'); // Import dynamically if needed or ensure it's in top-level
+
             onValue(connectedRef, (snap) => {
                 if (snap.val() === true) {
-                    // When app closes, set to away
+                    // Set status to online when connected
                     const stateRef = ref(db, `users/${deviceId}/status/state`);
                     set(stateRef, 'online');
-                    // onDisconnect().set() is not directly available in some older JS SDK versions but 
-                    // standard in v9+ database. We use the ref-based approach if available.
+
+                    // Automatically set to 'away' on disconnect
+                    const onDisconnectRef = onDisconnect(stateRef);
+                    onDisconnectRef.set('away');
                 }
             });
         }
@@ -56,10 +60,16 @@ export const FirebaseService = {
             lastChanged: serverTimestamp(),
         });
 
-        // Also log to history
+        // Also log to history with human readable labels
         const historyRef = ref(db, `users/${deviceId}/history`);
+        const statusLabels = {
+            online: 'Unlocked',
+            locked: 'Locked',
+            sos: 'SOS Triggered'
+        };
+
         await push(historyRef, {
-            status: status.toUpperCase(),
+            status: statusLabels[status] || status.toUpperCase(),
             timestamp: serverTimestamp(),
         });
     },

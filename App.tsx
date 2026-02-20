@@ -57,11 +57,13 @@ export default function App() {
     setIsPaired(!!partner);
   };
 
+  const [partnerStatus, setPartnerStatus] = useState<'online' | 'locked' | 'sos' | 'away'>('away');
+
   const setupAppStateListener = () => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         FirebaseService.updateStatus('online');
-      } else if (nextAppState.match(/inactive|background/)) {
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
         FirebaseService.updateStatus('locked');
       }
       appState.current = nextAppState;
@@ -78,8 +80,10 @@ export default function App() {
       if (partnerId) {
         statusUnsub = FirebaseService.subscribeToPartner(partnerId, (data) => {
           if (data && data.state) {
+            setPartnerStatus(data.state);
             setIsPartnerActive(data.state === 'online');
           } else {
+            setPartnerStatus('away');
             setIsPartnerActive(false);
           }
         });
@@ -200,9 +204,15 @@ export default function App() {
           </TouchableOpacity>
           <View style={styles.statusBox}>
             <Text style={[styles.statusText, { color: theme.text }]}>
-              {isPartnerActive ? 'Partner is Active' : 'Partner is Away'}
+              {partnerStatus === 'online' ? 'Partner is Active' :
+                partnerStatus === 'locked' ? 'Partner Phone Fixed' :
+                  partnerStatus === 'sos' ? 'Partner in SOS' : 'Partner is Away'}
             </Text>
-            <View style={[styles.dot, { backgroundColor: isPartnerActive ? '#4CAF50' : '#888' }]} />
+            <View style={[styles.dot, {
+              backgroundColor: partnerStatus === 'online' ? '#4CAF50' :
+                partnerStatus === 'locked' ? '#FF9800' :
+                  partnerStatus === 'sos' ? '#FF4444' : '#888'
+            }]} />
           </View>
         </View>
 

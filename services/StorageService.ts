@@ -13,7 +13,12 @@ export const StorageService = {
     async getDeviceId(): Promise<string> {
         let id = await AsyncStorage.getItem(STORAGE_KEYS.DEVICE_ID);
         if (!id) {
-            id = uuidv4();
+            // Generate a 6-character unique ID (Uppercase Alphanumeric)
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            id = '';
+            for (let i = 0; i < 6; i++) {
+                id += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
             await AsyncStorage.setItem(STORAGE_KEYS.DEVICE_ID, id);
         }
         return id;

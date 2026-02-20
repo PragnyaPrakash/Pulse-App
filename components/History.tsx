@@ -42,20 +42,22 @@ export const History = ({ onBack, theme }: HistoryProps) => {
     }, []);
 
     const renderItem = ({ item }: { item: any }) => {
-        const isSOS = item.status === 'SOS TRIGGERED' || item.status === 'SOS';
-        const isUnlock = item.status === 'Phone Unlocked' || item.status === 'ONLINE' || item.status === 'UNLOCKED';
+        const status = item.status || '';
+        const isSOS = status.includes('SOS');
+        const isUnlock = status === 'Unlocked' || status === 'ONLINE' || status === 'UNLOCKED';
+        const isLocked = status === 'Locked' || status === 'LOCKED';
 
         return (
-            <View style={[styles.item, { borderLeftColor: isSOS ? '#FF4444' : isUnlock ? '#4CAF50' : '#888' }]}>
+            <View style={[styles.item, { borderLeftColor: isSOS ? '#FF4444' : isUnlock ? '#4CAF50' : '#FF9800' }]}>
                 <View style={styles.itemHeader}>
                     {isSOS ? (
                         <PhoneCall size={16} color="#FF4444" />
                     ) : isUnlock ? (
                         <Unlock size={16} color="#4CAF50" />
                     ) : (
-                        <Lock size={16} color="#888" />
+                        <Lock size={16} color="#FF9800" />
                     )}
-                    <Text style={[styles.itemStatus, { color: theme.text }]}>Partner {item.status.toLowerCase()}</Text>
+                    <Text style={[styles.itemStatus, { color: theme.text }]}>Partner {status}</Text>
                 </View>
                 <Text style={[styles.itemTime, { color: theme.text, opacity: 0.4 }]}>
                     {new Date(item.timestamp).toLocaleString([], {
