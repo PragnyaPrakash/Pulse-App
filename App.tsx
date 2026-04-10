@@ -38,17 +38,31 @@ export default function App() {
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    initializeApp();
+    let mounted = true;
+    let cleanupAppState: (() => void) | undefined;
 
-    // Check pairing status every 5 seconds to update UI
+    const bootstrap = async () => {
+      cleanupAppState = await initializeApp();
+      if (mounted) {
+        await checkPairing();
+      }
+    };
+
+    bootstrap();
+
     const interval = setInterval(checkPairing, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+      cleanupAppState?.();
+    };
   }, []);
 
   const initializeApp = async () => {
     await checkPairing();
-    setupAppStateListener();
-    FirebaseService.updateStatus('online');
+    const cleanup = setupAppStateListener();
+    await FirebaseService.updateStatus('online');
+    return cleanup;
   };
 
 
@@ -74,11 +88,17 @@ export default function App() {
   useEffect(() => {
     let statusUnsub: (() => void) | null = null;
     let nudgeUnsub: (() => void) | null = null;
+    let active = true;
 
     const setupListeners = async () => {
       const partnerId = await StorageService.getPartnerId();
+      if (!active || !partnerId) return;
+
+      await FirebaseService.updateStatus('online');
+
       if (partnerId) {
         statusUnsub = FirebaseService.subscribeToPartner(partnerId, (data) => {
+          if (!active) return;
           if (data && data.state) {
             setPartnerStatus(data.state);
             setIsPartnerActive(data.state === 'online');
@@ -92,8 +112,6 @@ export default function App() {
       nudgeUnsub = await FirebaseService.subscribeToNudges(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setLastNudgeDate(new Date());
-        // Clear queue after handling
-        FirebaseService.clearNudges();
       });
     };
 
@@ -105,6 +123,7 @@ export default function App() {
 
 
     return () => {
+      active = false;
       if (statusUnsub) statusUnsub();
       if (nudgeUnsub) nudgeUnsub();
     };
@@ -112,6 +131,11 @@ export default function App() {
 
 
   const handleNudge = async () => {
+    if (!isPaired) {
+      Alert.alert('Connect First', 'Pair with your partner before sending a nudge.');
+      return;
+    }
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setLastNudgeDate(new Date());
     await FirebaseService.sendNudge();

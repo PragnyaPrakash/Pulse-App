@@ -55,13 +55,16 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
     };
 
     const handlePair = async () => {
-        if (partnerIdInput.length !== 6) {
+        const sanitizedId = partnerIdInput.trim().toUpperCase();
+
+        if (sanitizedId.length !== 6) {
             Alert.alert('Invalid ID', 'Please enter a 6-character Device ID.');
             return;
         }
-        const sanitizedId = partnerIdInput.trim();
+
         await StorageService.setPartnerId(sanitizedId);
         setIsPaired(true);
+        setPartnerIdInput(sanitizedId);
         Alert.alert('Synchronized!', 'Your Pulse is now connected.');
     };
 
@@ -123,7 +126,8 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
                                 placeholder="Enter ID here..."
                                 placeholderTextColor="rgba(255,255,255,0.2)"
                                 value={partnerIdInput}
-                                onChangeText={setPartnerIdInput}
+                                onChangeText={(value) => setPartnerIdInput(value.toUpperCase())}
+                                autoCapitalize="characters"
                             />
                             <TouchableOpacity
                                 style={[styles.pairButton, { backgroundColor: theme.accent }]}

@@ -1,5 +1,16 @@
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, onValue, set, push, serverTimestamp, get } from 'firebase/database';
+import {
+    getDatabase,
+    ref,
+    onValue,
+    set,
+    push,
+    serverTimestamp,
+    get,
+    onDisconnect,
+    onChildAdded,
+    remove
+} from 'firebase/database';
 import { StorageService } from './StorageService';
 
 // Firebase configuration (Placeholder - User needs to fill this or I use a test one)
@@ -17,10 +28,46 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// Connectivity status
-let isFirebaseInitialized = firebaseConfig.apiKey !== "AIzaSyD1Ff56sNbDq9YM50VQup9D9M5qdyeGe4U" || firebaseConfig.projectId !== "pulseapp-test";
-// Note: Since you just pasted the keys, I am setting this to true.
-isFirebaseInitialized = true;
+let isFirebaseInitialized = Boolean(
+    firebaseConfig.apiKey &&
+    firebaseConfig.projectId &&
+    firebaseConfig.databaseURL
+);
+let presenceInitializedFor: string | null = null;
+
+const STATUS_LABELS: Record<'online' | 'locked' | 'sos', string> = {
+    online: 'Unlocked',
+    locked: 'Locked',
+    sos: 'SOS Triggered'
+};
+
+const normalizeTimestamp = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    return null;
+};
+
+const ensurePresenceTracking = async (deviceId: string) => {
+    if (!isFirebaseInitialized || presenceInitializedFor === deviceId) return;
+
+    const connectedRef = ref(db, '.info/connected');
+    const statusRef = ref(db, `users/${deviceId}/status`);
+
+    onValue(connectedRef, async (snapshot) => {
+        if (snapshot.val() !== true) return;
+
+        await onDisconnect(statusRef).set({
+            state: 'away',
+            lastChanged: serverTimestamp(),
+        });
+
+        await set(statusRef, {
+            state: 'online',
+            lastChanged: serverTimestamp(),
+        });
+    });
+
+    presenceInitializedFor = deviceId;
+};
 
 
 export const FirebaseService = {
@@ -31,28 +78,14 @@ export const FirebaseService = {
     /**
      * Updates current user status in Firebase with Presence
      */
-    async updateStatus(status: 'online' | 'locked' | 'sos') {
+    async updateStatus(status: 'online' | 'locked' | 'sos' | 'away') {
         if (!isFirebaseInitialized) return;
 
         const deviceId = await StorageService.getDeviceId();
         const statusRef = ref(db, `users/${deviceId}/status`);
 
-        // Presence: Set to offline when disconnected
         if (status === 'online') {
-            const connectedRef = ref(db, '.info/connected');
-            const { onDisconnect } = require('firebase/database'); // Import dynamically if needed or ensure it's in top-level
-
-            onValue(connectedRef, (snap) => {
-                if (snap.val() === true) {
-                    // Set status to online when connected
-                    const stateRef = ref(db, `users/${deviceId}/status/state`);
-                    set(stateRef, 'online');
-
-                    // Automatically set to 'away' on disconnect
-                    const onDisconnectRef = onDisconnect(stateRef);
-                    onDisconnectRef.set('away');
-                }
-            });
+            await ensurePresenceTracking(deviceId);
         }
 
         await set(statusRef, {
@@ -60,18 +93,13 @@ export const FirebaseService = {
             lastChanged: serverTimestamp(),
         });
 
-        // Also log to history with human readable labels
-        const historyRef = ref(db, `users/${deviceId}/history`);
-        const statusLabels = {
-            online: 'Unlocked',
-            locked: 'Locked',
-            sos: 'SOS Triggered'
-        };
-
-        await push(historyRef, {
-            status: statusLabels[status] || status.toUpperCase(),
-            timestamp: serverTimestamp(),
-        });
+        if (status !== 'away') {
+            const historyRef = ref(db, `users/${deviceId}/history`);
+            await push(historyRef, {
+                status: STATUS_LABELS[status as 'online' | 'locked' | 'sos'] || status.toUpperCase(),
+                timestamp: serverTimestamp(),
+            });
+        }
     },
 
     /**
@@ -87,6 +115,7 @@ export const FirebaseService = {
         await push(nudgeRef, {
             from: myId,
             timestamp: serverTimestamp(),
+            clientTimestamp: Date.now(),
         });
     },
 
@@ -113,23 +142,21 @@ export const FirebaseService = {
 
         console.log(`[Firebase] Listening for nudges at users/${id}/nudges`);
 
-        return onValue(nudgeRef, (snapshot) => {
-            if (snapshot.exists()) {
-                const data = snapshot.val();
-                const latestKey = Object.keys(data).pop();
-                const latestNudge = latestKey ? data[latestKey] : null;
+        return onChildAdded(nudgeRef, async (snapshot) => {
+            const nudge = snapshot.val();
+            const timestamp =
+                normalizeTimestamp(nudge?.timestamp) ??
+                normalizeTimestamp(nudge?.clientTimestamp);
 
-                // Only trigger if the nudge is new (within the last 10 seconds or since session start)
-                if (latestNudge && latestNudge.timestamp > sessionStart - 10000) {
-                    console.log("[Firebase] New nudge received!");
-                    onNudge();
-                }
+            if (!timestamp || timestamp < sessionStart - 5000) {
+                return;
             }
+
+            console.log("[Firebase] New nudge received!");
+            onNudge();
+            await remove(snapshot.ref);
         });
     },
-
-
-
 
     /**
      * Clears all nudges for the current device
@@ -163,7 +190,13 @@ export const FirebaseService = {
         if (snapshot.exists()) {
             const data = snapshot.val();
             console.log(`[FirebaseService] Partner ${partnerId} history fetched:`, data);
-            return Object.values(data).reverse();
+            return Object.values(data)
+                .filter(Boolean)
+                .sort((a: any, b: any) => {
+                    const aTime = normalizeTimestamp(a?.timestamp) ?? 0;
+                    const bTime = normalizeTimestamp(b?.timestamp) ?? 0;
+                    return bTime - aTime;
+                });
         }
         return [];
     }
