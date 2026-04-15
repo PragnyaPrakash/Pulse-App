@@ -31,6 +31,7 @@ export default function App() {
   const [isPartnerActive, setIsPartnerActive] = useState(false);
   const [lastNudgeDate, setLastNudgeDate] = useState<Date | null>(null);
   const [isPaired, setIsPaired] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const appState = useRef(AppState.currentState);
   const sosCounter = useRef(0);
@@ -59,9 +60,15 @@ export default function App() {
   }, []);
 
   const initializeApp = async () => {
-    await checkPairing();
     const cleanup = setupAppStateListener();
-    await FirebaseService.updateStatus('online');
+    try {
+      await FirebaseService.registerDevice();
+      await validateSavedPairing();
+      await FirebaseService.updateStatus('online');
+      setSyncError(null);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Firebase sync failed.');
+    }
     return cleanup;
   };
 
@@ -71,14 +78,37 @@ export default function App() {
     setIsPaired(!!partner);
   };
 
+  const validateSavedPairing = async () => {
+    const partner = await StorageService.getPartnerId();
+    if (!partner) {
+      setIsPaired(false);
+      return;
+    }
+
+    const validation = await FirebaseService.validatePartnerCode(partner);
+    if (!validation.valid) {
+      await StorageService.clearPairing();
+      setIsPaired(false);
+      setSyncError(validation.message ?? 'Saved partner ID is no longer valid.');
+      return;
+    }
+
+    setIsPaired(true);
+  };
+
   const [partnerStatus, setPartnerStatus] = useState<'online' | 'locked' | 'sos' | 'away'>('away');
 
   const setupAppStateListener = () => {
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
-      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        FirebaseService.updateStatus('online');
-      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-        FirebaseService.updateStatus('locked');
+      try {
+        if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+          await FirebaseService.updateStatus('online');
+        } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+          await FirebaseService.updateStatus('locked');
+        }
+        setSyncError(null);
+      } catch (error) {
+        setSyncError(error instanceof Error ? error.message : 'Could not update phone status.');
       }
       appState.current = nextAppState;
     });
@@ -94,7 +124,13 @@ export default function App() {
       const partnerId = await StorageService.getPartnerId();
       if (!active || !partnerId) return;
 
-      await FirebaseService.updateStatus('online');
+      try {
+        await FirebaseService.updateStatus('online');
+        setSyncError(null);
+      } catch (error) {
+        setSyncError(error instanceof Error ? error.message : 'Could not start realtime sync.');
+        return;
+      }
 
       if (partnerId) {
         statusUnsub = FirebaseService.subscribeToPartner(partnerId, (data) => {
@@ -119,6 +155,7 @@ export default function App() {
       setupListeners();
     } else {
       setIsPartnerActive(false);
+      setPartnerStatus('away');
     }
 
 
@@ -138,7 +175,14 @@ export default function App() {
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setLastNudgeDate(new Date());
-    await FirebaseService.sendNudge();
+    try {
+      await FirebaseService.sendNudge();
+      setSyncError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not send nudge.';
+      setSyncError(message);
+      Alert.alert('Nudge Failed', message);
+    }
   };
 
   const handleSOS = async () => {
@@ -163,7 +207,9 @@ export default function App() {
         { cancelable: true }
       );
 
-      FirebaseService.updateStatus('sos');
+      FirebaseService.updateStatus('sos').catch((error) => {
+        setSyncError(error instanceof Error ? error.message : 'Could not sync SOS.');
+      });
       Linking.openURL(`tel:${sosNumber}`);
     }
   };
@@ -185,7 +231,7 @@ export default function App() {
   };
 
   if (currentView === 'connect') {
-    return <Connect onBack={() => switchView('pulse')} theme={theme} />;
+    return <Connect onBack={() => switchView('pulse')} theme={theme} onPairingChanged={checkPairing} />;
   }
 
   if (currentView === 'history') {
@@ -214,8 +260,14 @@ export default function App() {
           <Text style={[styles.subtitle, { color: theme.text, opacity: 0.5 }]}>
             {!FirebaseService.isConfigured()
               ? 'Action Required: Setup Firebase Keys'
-              : isPaired ? 'Bridged with Partner' : 'Seek a Heart to Sync'}
+              : syncError ? 'Sync issue: check Firebase rules'
+                : isPaired ? 'Bridged with Partner' : 'Seek a Heart to Sync'}
           </Text>
+          {syncError && (
+            <Text style={[styles.errorText, { color: '#D32F2F' }]} numberOfLines={2}>
+              {syncError}
+            </Text>
+          )}
         </View>
 
 
@@ -229,7 +281,7 @@ export default function App() {
           <View style={styles.statusBox}>
             <Text style={[styles.statusText, { color: theme.text }]}>
               {partnerStatus === 'online' ? 'Partner is Active' :
-                partnerStatus === 'locked' ? 'Partner Phone Fixed' :
+                partnerStatus === 'locked' ? 'Partner Phone Locked' :
                   partnerStatus === 'sos' ? 'Partner in SOS' : 'Partner is Away'}
             </Text>
             <View style={[styles.dot, {
@@ -310,6 +362,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 8,
     letterSpacing: 0.5,
+  },
+  errorText: {
+    fontSize: 11,
+    marginTop: 8,
+    paddingHorizontal: 18,
+    textAlign: 'center',
   },
   pulseContainer: {
     alignItems: 'center',

@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-get-random-values';
-import { v4 as uuidv4 } from 'uuid';
 
 const STORAGE_KEYS = {
     DEVICE_ID: 'pulse_device_id',
@@ -29,7 +28,7 @@ export const StorageService = {
     },
 
     async setPartnerId(id: string): Promise<void> {
-        const sanitizedId = (id || '').trim();
+        const sanitizedId = (id || '').trim().toUpperCase();
         await AsyncStorage.setItem(STORAGE_KEYS.PARTNER_ID, sanitizedId);
     },
 

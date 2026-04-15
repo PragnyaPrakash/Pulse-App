@@ -19,6 +19,8 @@ interface HistoryProps {
 export const History = ({ onBack, theme }: HistoryProps) => {
     const [history, setHistory] = useState<any[]>([]);
     const [refreshing, setRefreshing] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const fadeAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -31,8 +33,16 @@ export const History = ({ onBack, theme }: HistoryProps) => {
     }, []);
 
     const loadHistory = async () => {
-        const data = await FirebaseService.getPartnerHistory();
-        setHistory(data);
+        try {
+            setError(null);
+            const data = await FirebaseService.getPartnerHistory();
+            setHistory(data);
+        } catch (loadError) {
+            setHistory([]);
+            setError(loadError instanceof Error ? loadError.message : 'Could not load partner history.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const onRefresh = React.useCallback(async () => {
@@ -93,8 +103,8 @@ export const History = ({ onBack, theme }: HistoryProps) => {
                 }
                 ListEmptyComponent={
                     <View style={styles.empty}>
-                        <Text style={[styles.emptyText, { color: theme.text, opacity: 0.3 }]}>
-                            Waiting for partner activity...
+                        <Text style={[styles.emptyText, { color: error ? '#D32F2F' : theme.text, opacity: error ? 1 : 0.35 }]}>
+                            {error || (loading ? 'Loading partner activity...' : 'Waiting for partner activity...')}
                         </Text>
                     </View>
                 }

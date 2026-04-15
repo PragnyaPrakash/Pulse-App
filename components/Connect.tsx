@@ -12,17 +12,20 @@ import {
     Animated,
 } from 'react-native';
 import { StorageService } from '../services/StorageService';
+import { FirebaseService } from '../services/FirebaseService';
 import { Share2, Link2, Ghost, ChevronLeft, Heart } from 'lucide-react-native';
 
 interface ConnectProps {
     onBack: () => void;
     theme: any;
+    onPairingChanged?: () => void;
 }
 
-export const Connect = ({ onBack, theme }: ConnectProps) => {
+export const Connect = ({ onBack, theme, onPairingChanged }: ConnectProps) => {
     const [deviceId, setDeviceId] = useState('');
     const [partnerIdInput, setPartnerIdInput] = useState('');
     const [isPaired, setIsPaired] = useState(false);
+    const [isPairing, setIsPairing] = useState(false);
     const fadeAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -35,12 +38,29 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
     }, []);
 
     const loadData = async () => {
-        const id = await StorageService.getDeviceId();
-        setDeviceId(id);
-        const partner = await StorageService.getPartnerId();
-        if (partner) {
-            setIsPaired(true);
-            setPartnerIdInput(partner);
+        try {
+            const id = await StorageService.getDeviceId();
+            setDeviceId(id);
+            await FirebaseService.registerDevice();
+
+            const partner = await StorageService.getPartnerId();
+            if (partner) {
+                const validation = await FirebaseService.validatePartnerCode(partner);
+                if (!validation.valid) {
+                    await StorageService.clearPairing();
+                    setIsPaired(false);
+                    setPartnerIdInput('');
+                    Alert.alert('Pairing Reset', validation.message);
+                    onPairingChanged?.();
+                    return;
+                }
+
+                setIsPaired(true);
+                setPartnerIdInput(partner);
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not connect to Firebase.';
+            Alert.alert('Sync Setup Failed', message);
         }
     };
 
@@ -57,15 +77,20 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
     const handlePair = async () => {
         const sanitizedId = partnerIdInput.trim().toUpperCase();
 
-        if (sanitizedId.length !== 6) {
-            Alert.alert('Invalid ID', 'Please enter a 6-character Device ID.');
-            return;
-        }
+        setIsPairing(true);
+        try {
+            const partnerId = await FirebaseService.pairWithPartner(sanitizedId);
 
-        await StorageService.setPartnerId(sanitizedId);
-        setIsPaired(true);
-        setPartnerIdInput(sanitizedId);
-        Alert.alert('Synchronized!', 'Your Pulse is now connected.');
+            setIsPaired(true);
+            setPartnerIdInput(partnerId);
+            onPairingChanged?.();
+            Alert.alert('Synchronized!', 'Your Pulse is now connected.');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not connect to this partner ID.';
+            Alert.alert('Connection Failed', message);
+        } finally {
+            setIsPairing(false);
+        }
     };
 
 
@@ -79,9 +104,10 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
                     text: 'Disconnect',
                     style: 'destructive',
                     onPress: async () => {
-                        await StorageService.clearPairing();
+                        await FirebaseService.clearPairing();
                         setIsPaired(false);
                         setPartnerIdInput('');
+                        onPairingChanged?.();
                     }
                 },
             ]
@@ -128,13 +154,15 @@ export const Connect = ({ onBack, theme }: ConnectProps) => {
                                 value={partnerIdInput}
                                 onChangeText={(value) => setPartnerIdInput(value.toUpperCase())}
                                 autoCapitalize="characters"
+                                maxLength={6}
                             />
                             <TouchableOpacity
-                                style={[styles.pairButton, { backgroundColor: theme.accent }]}
+                                style={[styles.pairButton, { backgroundColor: theme.accent, opacity: isPairing ? 0.7 : 1 }]}
                                 onPress={handlePair}
+                                disabled={isPairing}
                             >
                                 <Link2 size={20} color="#FFF" />
-                                <Text style={styles.pairButtonText}>Connect Hearts</Text>
+                                <Text style={styles.pairButtonText}>{isPairing ? 'Checking Partner...' : 'Connect Hearts'}</Text>
                             </TouchableOpacity>
                         </View>
                     ) : (

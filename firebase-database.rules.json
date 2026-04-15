@@ -1,0 +1,28 @@
+{
+  "rules": {
+    "users": {
+      "$deviceId": {
+        ".read": true,
+        "profile": {
+          ".write": "newData.exists() && newData.child('id').val() === $deviceId"
+        },
+        "pairing": {
+          ".write": "!newData.exists() || newData.hasChild('partnerId')"
+        },
+        "status": {
+          ".write": "newData.exists() && newData.hasChildren(['state', 'lastChanged']) && (newData.child('state').val() === 'online' || newData.child('state').val() === 'locked' || newData.child('state').val() === 'sos' || newData.child('state').val() === 'away')"
+        },
+        "nudges": {
+          "$nudgeId": {
+            ".write": "!newData.exists() || (newData.hasChildren(['from', 'to', 'timestamp']) && newData.child('to').val() === $deviceId)"
+          }
+        },
+        "history": {
+          "$entryId": {
+            ".write": "newData.exists() && newData.hasChildren(['status', 'timestamp'])"
+          }
+        }
+      }
+    }
+  }
+}
