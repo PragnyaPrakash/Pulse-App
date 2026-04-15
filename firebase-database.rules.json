@@ -1,26 +1,42 @@
 {
   "rules": {
+    "codes": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && newData.exists() && newData.child('uid').val() === auth.uid && (!data.exists() || data.child('uid').val() === auth.uid)"
+      }
+    },
     "users": {
-      "$deviceId": {
-        ".read": true,
-        "profile": {
-          ".write": "newData.exists() && newData.child('id').val() === $deviceId"
-        },
-        "pairing": {
-          ".write": "!newData.exists() || newData.hasChild('partnerId')"
-        },
-        "status": {
-          ".write": "newData.exists() && newData.hasChildren(['state', 'lastChanged']) && (newData.child('state').val() === 'online' || newData.child('state').val() === 'locked' || newData.child('state').val() === 'sos' || newData.child('state').val() === 'away')"
-        },
-        "nudges": {
-          "$nudgeId": {
-            ".write": "!newData.exists() || (newData.hasChildren(['from', 'to', 'timestamp']) && newData.child('to').val() === $deviceId)"
-          }
-        },
-        "history": {
-          "$entryId": {
-            ".write": "newData.exists() && newData.hasChildren(['status', 'timestamp'])"
-          }
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "pairings": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "status": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $uid && newData.hasChildren(['state', 'lastChanged']) && (newData.child('state').val() === 'online' || newData.child('state').val() === 'locked' || newData.child('state').val() === 'sos' || newData.child('state').val() === 'away')"
+      }
+    },
+    "history": {
+      "$uid": {
+        ".read": "auth != null",
+        "$entryId": {
+          ".write": "auth != null && auth.uid === $uid && newData.exists() && newData.hasChildren(['status', 'state', 'timestamp'])"
+        }
+      }
+    },
+    "nudges": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$nudgeId": {
+          ".write": "auth != null && ((!newData.exists() && auth.uid === $uid) || (newData.exists() && newData.child('toUid').val() === $uid && newData.child('fromUid').val() === auth.uid))"
         }
       }
     }

@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { initializeApp } from 'firebase/app';
 import {
     getDatabase,
@@ -10,11 +11,13 @@ import {
     onDisconnect,
     onChildAdded,
     remove,
-    update
+    update,
+    limitToLast,
+    query
 } from 'firebase/database';
+import * as FirebaseAuth from '@firebase/auth';
 import { StorageService } from './StorageService';
 
-// Firebase configuration (Placeholder - User needs to fill this or I use a test one)
 const firebaseConfig = {
     apiKey: "AIzaSyD1Ff56sNbDq9YM50VQup9D9M5qdyeGe4U",
     authDomain: "web-app-77a30.firebaseapp.com",
@@ -29,14 +32,30 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+let auth: FirebaseAuth.Auth;
+try {
+    auth = FirebaseAuth.initializeAuth(app, {
+        persistence: (FirebaseAuth as any).getReactNativePersistence(AsyncStorage),
+    });
+} catch {
+    auth = FirebaseAuth.getAuth(app);
+}
+
 export type DeviceStatus = 'online' | 'locked' | 'sos' | 'away';
 
-let isFirebaseInitialized = Boolean(
-    firebaseConfig.apiKey &&
-    firebaseConfig.projectId &&
-    firebaseConfig.databaseURL
-);
+export type PulseEvent = {
+    id?: string;
+    status: string;
+    state: DeviceStatus | 'nudge';
+    timestamp: number;
+};
+
+type PartnerValidation =
+    | { valid: true; partnerId: string; partnerUid: string }
+    | { valid: false; message: string };
+
 let presenceInitializedFor: string | null = null;
+let cachedUid: string | null = null;
 
 const STATUS_LABELS: Record<Exclude<DeviceStatus, 'away'>, string> = {
     online: 'Unlocked',
@@ -44,276 +63,323 @@ const STATUS_LABELS: Record<Exclude<DeviceStatus, 'away'>, string> = {
     sos: 'SOS Triggered'
 };
 
-const normalizeTimestamp = (value: unknown): number | null => {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    return null;
-};
+const isFirebaseConfigured = Boolean(
+    firebaseConfig.apiKey &&
+    firebaseConfig.projectId &&
+    firebaseConfig.databaseURL
+);
+
+const now = () => Date.now();
 
 const normalizeCode = (code: string) => code.trim().toUpperCase();
 
-const firebaseErrorMessage = (error: unknown) => {
-    if (error instanceof Error) return error.message;
-    return 'Firebase sync failed. Please check database rules and internet connection.';
+const normalizeTimestamp = (value: unknown): number => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    return now();
 };
 
-const ensurePresenceTracking = async (deviceId: string) => {
-    if (!isFirebaseInitialized || presenceInitializedFor === deviceId) return;
+const cleanFirebaseError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (message.includes('auth/operation-not-allowed')) {
+        return 'Firebase Anonymous sign-in is disabled. Enable Authentication > Sign-in method > Anonymous.';
+    }
+
+    if (message.includes('permission_denied') || message.includes('PERMISSION_DENIED')) {
+        return 'Firebase denied sync. Publish the Realtime Database rules from firebase-database.rules.json.';
+    }
+
+    if (message.includes('timeout')) {
+        return 'Firebase is taking too long to respond. Check internet and Firebase setup.';
+    }
+
+    return message || 'Firebase sync failed.';
+};
+
+const withTimeout = async <T,>(promise: Promise<T>, label: string, ms = 10000): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label} timeout`)), ms);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+};
+
+const ensureSession = async () => {
+    if (!isFirebaseConfigured) {
+        throw new Error('Firebase is not configured.');
+    }
+
+    if (cachedUid) return cachedUid;
+
+    await withTimeout(auth.authStateReady(), 'auth ready');
+
+    if (!auth.currentUser) {
+        await withTimeout(FirebaseAuth.signInAnonymously(auth), 'anonymous sign-in');
+    }
+
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+        throw new Error('Could not create Firebase session.');
+    }
+
+    cachedUid = uid;
+    return uid;
+};
+
+const getCodeOwner = async (code: string): Promise<string | null> => {
+    const snapshot = await withTimeout(get(ref(db, `codes/${code}`)), 'partner lookup');
+    const value = snapshot.val();
+    return typeof value?.uid === 'string' ? value.uid : null;
+};
+
+const ensureUniqueDeviceCode = async (uid: string) => {
+    let code = normalizeCode(await StorageService.getDeviceId());
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        const ownerUid = await getCodeOwner(code);
+        if (!ownerUid || ownerUid === uid) {
+            return code;
+        }
+
+        code = await StorageService.resetDeviceId();
+    }
+
+    throw new Error('Could not create a unique device code. Please try again.');
+};
+
+const writeHistory = async (uid: string, status: string, state: PulseEvent['state']) => {
+    await withTimeout(Promise.resolve(push(ref(db, `history/${uid}`), {
+        status,
+        state,
+        timestamp: serverTimestamp(),
+        clientTimestamp: now(),
+    })), 'history write');
+};
+
+const ensurePresenceTracking = async (uid: string, code: string) => {
+    if (presenceInitializedFor === uid) return;
 
     const connectedRef = ref(db, '.info/connected');
-    const statusRef = ref(db, `users/${deviceId}/status`);
+    const statusRef = ref(db, `status/${uid}`);
 
     onValue(connectedRef, async (snapshot) => {
         if (snapshot.val() !== true) return;
 
         await onDisconnect(statusRef).set({
+            code,
             state: 'away',
             lastChanged: serverTimestamp(),
+            clientTimestamp: now(),
         });
 
         await set(statusRef, {
+            code,
             state: 'online',
             lastChanged: serverTimestamp(),
+            clientTimestamp: now(),
         });
     });
 
-    presenceInitializedFor = deviceId;
+    presenceInitializedFor = uid;
 };
-
 
 export const FirebaseService = {
     isConfigured() {
-        return isFirebaseInitialized;
+        return isFirebaseConfigured;
+    },
+
+    async initialize() {
+        await this.registerDevice();
+        const partnerId = await StorageService.getPartnerId();
+        const partnerUid = await StorageService.getPartnerUid();
+
+        if (partnerId && partnerUid) {
+            const validation = await this.validatePartnerCode(partnerId);
+            if (!validation.valid) {
+                await StorageService.clearPairing();
+                throw new Error(validation.message);
+            }
+        }
     },
 
     async registerDevice() {
-        if (!isFirebaseInitialized) return;
+        const uid = await ensureSession();
+        const code = await ensureUniqueDeviceCode(uid);
 
-        const deviceId = await StorageService.getDeviceId();
-        const profileRef = ref(db, `users/${deviceId}/profile`);
-
-        try {
-            await update(profileRef, {
-                id: deviceId,
+        await withTimeout(update(ref(db), {
+            [`codes/${code}`]: {
+                uid,
+                code,
+                updatedAt: serverTimestamp(),
+            },
+            [`users/${uid}/profile`]: {
+                uid,
+                code,
                 appName: 'Pulse',
-                appVersion: '1.0.1',
+                appVersion: '1.0.2',
                 lastSeen: serverTimestamp(),
-            });
-        } catch (error) {
-            throw new Error(firebaseErrorMessage(error));
-        }
+            },
+        }), 'device registration');
+
+        return { uid, code };
     },
 
-    async validatePartnerCode(code: string) {
-        if (!isFirebaseInitialized) {
-            return { valid: false, message: 'Firebase is not configured.' };
-        }
-
-        const partnerId = normalizeCode(code);
-        const myId = await StorageService.getDeviceId();
-
-        if (partnerId.length !== 6) {
-            return { valid: false, message: 'Please enter a 6-character Device ID.' };
-        }
-
-        if (partnerId === myId) {
-            return { valid: false, message: 'This is your own ID. Enter your partner device ID.' };
-        }
-
+    async validatePartnerCode(code: string): Promise<PartnerValidation> {
         try {
-            const profileSnapshot = await get(ref(db, `users/${partnerId}/profile`));
-            if (!profileSnapshot.exists()) {
-                return { valid: false, message: 'No Pulse device found with this ID. Open Pulse once on your partner phone, then try again.' };
+            const partnerId = normalizeCode(code);
+            const { uid } = await this.registerDevice();
+            const myCode = normalizeCode(await StorageService.getDeviceId());
+
+            if (partnerId.length !== 6) {
+                return { valid: false, message: 'Please enter the exact 6-character partner ID.' };
             }
 
-            return { valid: true, partnerId };
+            if (partnerId === myCode) {
+                return { valid: false, message: 'That is your own Pulse ID. Enter your partner ID.' };
+            }
+
+            const partnerUid = await getCodeOwner(partnerId);
+            if (!partnerUid) {
+                return { valid: false, message: 'No active Pulse device found with this ID. Open Pulse on the partner phone first.' };
+            }
+
+            if (partnerUid === uid) {
+                return { valid: false, message: 'That ID belongs to this phone.' };
+            }
+
+            return { valid: true, partnerId, partnerUid };
         } catch (error) {
-            return { valid: false, message: firebaseErrorMessage(error) };
+            return { valid: false, message: cleanFirebaseError(error) };
         }
     },
 
     async pairWithPartner(code: string) {
-        const result = await this.validatePartnerCode(code);
-        if (!result.valid || !result.partnerId) {
-            throw new Error(result.message);
-        }
-
-        const myId = await StorageService.getDeviceId();
-        await StorageService.setPartnerId(result.partnerId);
-
-        try {
-            await set(ref(db, `users/${myId}/pairing`), {
-                partnerId: result.partnerId,
-                pairedAt: serverTimestamp(),
-            });
-        } catch (error) {
-            await StorageService.clearPairing();
-            throw new Error(firebaseErrorMessage(error));
-        }
-
-        return result.partnerId;
-    },
-
-    async clearPairing() {
-        const myId = await StorageService.getDeviceId();
-        await StorageService.clearPairing();
-
-        if (!isFirebaseInitialized) return;
-
-        try {
-            await remove(ref(db, `users/${myId}/pairing`));
-        } catch (error) {
-            console.warn('[FirebaseService] Failed to clear remote pairing:', error);
-        }
-    },
-
-    /**
-     * Updates current user status in Firebase with Presence
-     */
-    async updateStatus(status: DeviceStatus) {
-        if (!isFirebaseInitialized) return;
-
-        const deviceId = await StorageService.getDeviceId();
-        const statusRef = ref(db, `users/${deviceId}/status`);
-
-        try {
-            await this.registerDevice();
-
-            if (status === 'online') {
-                await ensurePresenceTracking(deviceId);
-            }
-
-            await set(statusRef, {
-                state: status,
-                lastChanged: serverTimestamp(),
-            });
-
-            if (status !== 'away') {
-                const historyRef = ref(db, `users/${deviceId}/history`);
-                await push(historyRef, {
-                    status: STATUS_LABELS[status],
-                    timestamp: serverTimestamp(),
-                });
-            }
-        } catch (error) {
-            throw new Error(firebaseErrorMessage(error));
-        }
-    },
-
-    /**
-     * Sends a nudge to the partner via a queue (push)
-     */
-    async sendNudge() {
-        if (!isFirebaseInitialized) return;
-        const partnerId = await StorageService.getPartnerId();
-        const myId = await StorageService.getDeviceId();
-        if (!partnerId) return;
-
-        const validation = await this.validatePartnerCode(partnerId);
+        const validation = await this.validatePartnerCode(code);
         if (!validation.valid) {
-            await StorageService.clearPairing();
             throw new Error(validation.message);
         }
 
-        try {
-            const nudgeRef = ref(db, `users/${partnerId}/nudges`);
-            await push(nudgeRef, {
-                from: myId,
-                to: partnerId,
-                timestamp: serverTimestamp(),
-            });
-        } catch (error) {
-            throw new Error(firebaseErrorMessage(error));
+        const uid = await ensureSession();
+        await StorageService.setPartnerId(validation.partnerId);
+        await StorageService.setPartnerUid(validation.partnerUid);
+
+        await withTimeout(set(ref(db, `pairings/${uid}`), {
+            partnerCode: validation.partnerId,
+            partnerUid: validation.partnerUid,
+            pairedAt: serverTimestamp(),
+        }), 'pairing write');
+
+        return validation.partnerId;
+    },
+
+    async clearPairing() {
+        const uid = await ensureSession();
+        await StorageService.clearPairing();
+        await withTimeout(remove(ref(db, `pairings/${uid}`)), 'pairing clear', 6000).catch(() => undefined);
+    },
+
+    async updateStatus(status: DeviceStatus) {
+        const { uid, code } = await this.registerDevice();
+
+        await withTimeout(set(ref(db, `status/${uid}`), {
+            code,
+            state: status,
+            lastChanged: serverTimestamp(),
+            clientTimestamp: now(),
+        }), 'status update');
+
+        if (status === 'online') {
+            await ensurePresenceTracking(uid, code);
+        }
+
+        if (status !== 'away') {
+            await writeHistory(uid, STATUS_LABELS[status], status);
         }
     },
 
+    async sendNudge() {
+        const partnerId = await StorageService.getPartnerId();
+        const partnerUid = await StorageService.getPartnerUid();
+        const { uid, code } = await this.registerDevice();
 
-    /**
-     * Listens for partner updates
-     */
-    subscribeToPartner(partnerId: string, onUpdate: (data: any) => void) {
-        if (!isFirebaseInitialized) return () => { };
-        const statusRef = ref(db, `users/${partnerId}/status`);
-        return onValue(statusRef, (snapshot) => {
-            onUpdate(snapshot.val());
+        if (!partnerId || !partnerUid) {
+            throw new Error('Pair with your partner before sending a nudge.');
+        }
+
+        const validation = await this.validatePartnerCode(partnerId);
+        if (!validation.valid || validation.partnerUid !== partnerUid) {
+            await StorageService.clearPairing();
+            throw new Error(validation.valid ? 'Partner pairing changed. Pair again.' : validation.message);
+        }
+
+        await withTimeout(Promise.resolve(push(ref(db, `nudges/${partnerUid}`), {
+            fromUid: uid,
+            fromCode: code,
+            toUid: partnerUid,
+            timestamp: serverTimestamp(),
+            clientTimestamp: now(),
+        })), 'nudge send');
+
+        await writeHistory(uid, 'Nudge Sent', 'nudge');
+    },
+
+    async subscribeToPartner(onUpdate: (data: { state: DeviceStatus } | null) => void) {
+        const partnerUid = await StorageService.getPartnerUid();
+        if (!partnerUid) return () => { };
+
+        return onValue(ref(db, `status/${partnerUid}`), (snapshot) => {
+            const value = snapshot.val();
+            onUpdate(value?.state ? value : null);
         }, (error) => {
             console.warn('[FirebaseService] Partner status listener failed:', error);
             onUpdate(null);
         });
     },
 
-    /**
-     * Listens for incoming nudges via child_added
-     */
     async subscribeToNudges(onNudge: () => void) {
-        if (!isFirebaseInitialized) return () => { };
-        const id = await StorageService.getDeviceId();
-        const partnerId = await StorageService.getPartnerId();
-        if (!partnerId) return () => { };
+        const uid = await ensureSession();
+        const partnerUid = await StorageService.getPartnerUid();
+        if (!partnerUid) return () => { };
 
-        const nudgeRef = ref(db, `users/${id}/nudges`);
-
-        console.log(`[Firebase] Listening for nudges at users/${id}/nudges`);
-
-        return onChildAdded(nudgeRef, async (snapshot) => {
+        return onChildAdded(ref(db, `nudges/${uid}`), async (snapshot) => {
             const nudge = snapshot.val();
 
-            if (nudge?.from !== partnerId) {
+            if (nudge?.fromUid !== partnerUid) {
                 await remove(snapshot.ref);
                 return;
             }
 
-            console.log("[Firebase] New nudge received!");
             onNudge();
+            await writeHistory(uid, 'Nudge Received', 'nudge');
             await remove(snapshot.ref);
         }, (error) => {
             console.warn('[FirebaseService] Nudge listener failed:', error);
         });
     },
 
-    /**
-     * Clears all nudges for the current device
-     */
-    async clearNudges() {
-        if (!isFirebaseInitialized) return;
-        const id = await StorageService.getDeviceId();
-        const nudgeRef = ref(db, `users/${id}/nudges`);
-        await set(nudgeRef, null);
-        console.log(`[FirebaseService] Nudges cleared for device ${id}.`);
-    },
+    async getPartnerHistory(): Promise<PulseEvent[]> {
+        const partnerUid = await StorageService.getPartnerUid();
+        if (!partnerUid) return [];
 
-    /**
-     * Fetches partner's history
-     */
+        const historyQuery = query(ref(db, `history/${partnerUid}`), limitToLast(30));
+        const snapshot = await withTimeout(get(historyQuery), 'history load');
 
-    async getPartnerHistory(): Promise<any[]> {
-        if (!isFirebaseInitialized) {
-            console.warn("[FirebaseService] Not initialized, cannot fetch partner history.");
-            return [];
-        }
-        const partnerId = await StorageService.getPartnerId();
-        if (!partnerId) {
-            console.warn("[FirebaseService] Partner ID not found, cannot fetch partner history.");
-            return [];
-        }
+        if (!snapshot.exists()) return [];
 
-        console.log(`[FirebaseService] Fetching history for partner ${partnerId}.`);
-        try {
-            const historyRef = ref(db, `users/${partnerId}/history`);
-            const snapshot = await get(historyRef);
-            if (snapshot.exists()) {
-                const data = snapshot.val();
-                console.log(`[FirebaseService] Partner ${partnerId} history fetched:`, data);
-                return Object.values(data)
-                    .filter(Boolean)
-                    .sort((a: any, b: any) => {
-                        const aTime = normalizeTimestamp(a?.timestamp) ?? 0;
-                        const bTime = normalizeTimestamp(b?.timestamp) ?? 0;
-                        return bTime - aTime;
-                    });
-            }
-            return [];
-        } catch (error) {
-            throw new Error(firebaseErrorMessage(error));
-        }
+        return Object.entries(snapshot.val() as Record<string, any>)
+            .map(([id, item]) => ({
+                id,
+                status: String(item?.status ?? 'Activity'),
+                state: (item?.state ?? 'away') as PulseEvent['state'],
+                timestamp: normalizeTimestamp(item?.clientTimestamp ?? item?.timestamp),
+            }))
+            .sort((a, b) => b.timestamp - a.timestamp);
     }
 };

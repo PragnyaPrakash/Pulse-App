@@ -67,6 +67,8 @@ This project uses Firebase Realtime Database for presence, nudges, and history.
 
 Update the Firebase config in [`services/FirebaseService.ts`](./services/FirebaseService.ts) with your own project values if you want to run it under your own backend.
 
+Enable Firebase Authentication with the Anonymous sign-in provider. Pulse uses an anonymous Firebase session to protect each phone's private sync paths while still keeping onboarding simple.
+
 Use [`firebase-database.rules.json`](./firebase-database.rules.json) as the Realtime Database rules template for the current device-code based sync flow.
 
 Make sure your Realtime Database rules allow the app to read and write the paths it uses for:

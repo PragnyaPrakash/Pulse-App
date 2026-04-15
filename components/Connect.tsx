@@ -184,7 +184,7 @@ export const Connect = ({ onBack, theme, onPairingChanged }: ConnectProps) => {
                     <View style={styles.infoSection}>
                         <Text style={[styles.infoTitle, { color: theme.text }]}>About Pulse</Text>
                         <Text style={[styles.infoText, { color: theme.text, opacity: 0.5 }]}>
-                            Version 1.2.0 • Subtle & Creative Connection
+                            Version 1.0.2 • Subtle & Creative Connection
                         </Text>
                     </View>
                 </View>

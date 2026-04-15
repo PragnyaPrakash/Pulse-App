@@ -4,22 +4,33 @@ import 'react-native-get-random-values';
 const STORAGE_KEYS = {
     DEVICE_ID: 'pulse_device_id',
     PARTNER_ID: 'pulse_partner_id',
+    PARTNER_UID: 'pulse_partner_uid',
     SOS_NUMBER: 'pulse_sos_number',
     STATUS_HISTORY: 'pulse_status_history',
+};
+
+const createDeviceCode = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let id = '';
+    for (let i = 0; i < 6; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return id;
 };
 
 export const StorageService = {
     async getDeviceId(): Promise<string> {
         let id = await AsyncStorage.getItem(STORAGE_KEYS.DEVICE_ID);
         if (!id) {
-            // Generate a 6-character unique ID (Uppercase Alphanumeric)
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            id = '';
-            for (let i = 0; i < 6; i++) {
-                id += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
+            id = createDeviceCode();
             await AsyncStorage.setItem(STORAGE_KEYS.DEVICE_ID, id);
         }
+        return id;
+    },
+
+    async resetDeviceId(): Promise<string> {
+        const id = createDeviceCode();
+        await AsyncStorage.setItem(STORAGE_KEYS.DEVICE_ID, id);
         return id;
     },
 
@@ -32,6 +43,13 @@ export const StorageService = {
         await AsyncStorage.setItem(STORAGE_KEYS.PARTNER_ID, sanitizedId);
     },
 
+    async getPartnerUid(): Promise<string | null> {
+        return await AsyncStorage.getItem(STORAGE_KEYS.PARTNER_UID);
+    },
+
+    async setPartnerUid(uid: string): Promise<void> {
+        await AsyncStorage.setItem(STORAGE_KEYS.PARTNER_UID, uid);
+    },
 
     async getSosNumber(): Promise<string | null> {
         return await AsyncStorage.getItem(STORAGE_KEYS.SOS_NUMBER);
@@ -58,5 +76,6 @@ export const StorageService = {
 
     async clearPairing(): Promise<void> {
         await AsyncStorage.removeItem(STORAGE_KEYS.PARTNER_ID);
+        await AsyncStorage.removeItem(STORAGE_KEYS.PARTNER_UID);
     }
 };

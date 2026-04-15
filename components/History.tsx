@@ -8,8 +8,8 @@ import {
     RefreshControl,
     Animated,
 } from 'react-native';
-import { FirebaseService } from '../services/FirebaseService';
-import { Clock, Unlock, Lock, PhoneCall, ChevronLeft } from 'lucide-react-native';
+import { FirebaseService, type PulseEvent } from '../services/FirebaseService';
+import { Clock, Unlock, Lock, PhoneCall, ChevronLeft, Heart } from 'lucide-react-native';
 
 interface HistoryProps {
     onBack: () => void;
@@ -17,7 +17,7 @@ interface HistoryProps {
 }
 
 export const History = ({ onBack, theme }: HistoryProps) => {
-    const [history, setHistory] = useState<any[]>([]);
+    const [history, setHistory] = useState<PulseEvent[]>([]);
     const [refreshing, setRefreshing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -51,23 +51,34 @@ export const History = ({ onBack, theme }: HistoryProps) => {
         setRefreshing(false);
     }, []);
 
-    const renderItem = ({ item }: { item: any }) => {
-        const status = item.status || '';
-        const isSOS = status.includes('SOS');
-        const isUnlock = status === 'Unlocked' || status === 'ONLINE' || status === 'UNLOCKED';
-        const isLocked = status === 'Locked' || status === 'LOCKED';
+    const renderItem = ({ item }: { item: PulseEvent }) => {
+        const isSOS = item.state === 'sos';
+        const isUnlock = item.state === 'online';
+        const isLocked = item.state === 'locked';
+        const isNudge = item.state === 'nudge';
+        const label = isUnlock
+            ? 'Partner unlocked phone'
+            : isLocked
+                ? 'Partner locked phone'
+                : isSOS
+                    ? 'Partner triggered SOS'
+                    : isNudge
+                        ? item.status
+                        : 'Partner activity';
 
         return (
-            <View style={[styles.item, { borderLeftColor: isSOS ? '#FF4444' : isUnlock ? '#4CAF50' : '#FF9800' }]}>
+            <View style={[styles.item, { borderLeftColor: isSOS ? '#FF4444' : isUnlock ? '#4CAF50' : isNudge ? '#EC407A' : '#FF9800' }]}>
                 <View style={styles.itemHeader}>
                     {isSOS ? (
                         <PhoneCall size={16} color="#FF4444" />
                     ) : isUnlock ? (
                         <Unlock size={16} color="#4CAF50" />
+                    ) : isNudge ? (
+                        <Heart size={16} color="#EC407A" />
                     ) : (
                         <Lock size={16} color="#FF9800" />
                     )}
-                    <Text style={[styles.itemStatus, { color: theme.text }]}>Partner {status}</Text>
+                    <Text style={[styles.itemStatus, { color: theme.text }]}>{label}</Text>
                 </View>
                 <Text style={[styles.itemTime, { color: theme.text, opacity: 0.4 }]}>
                     {new Date(item.timestamp).toLocaleString([], {

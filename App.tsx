@@ -62,8 +62,8 @@ export default function App() {
   const initializeApp = async () => {
     const cleanup = setupAppStateListener();
     try {
-      await FirebaseService.registerDevice();
-      await validateSavedPairing();
+      await FirebaseService.initialize();
+      await checkPairing();
       await FirebaseService.updateStatus('online');
       setSyncError(null);
     } catch (error) {
@@ -75,25 +75,8 @@ export default function App() {
 
   const checkPairing = async () => {
     const partner = await StorageService.getPartnerId();
-    setIsPaired(!!partner);
-  };
-
-  const validateSavedPairing = async () => {
-    const partner = await StorageService.getPartnerId();
-    if (!partner) {
-      setIsPaired(false);
-      return;
-    }
-
-    const validation = await FirebaseService.validatePartnerCode(partner);
-    if (!validation.valid) {
-      await StorageService.clearPairing();
-      setIsPaired(false);
-      setSyncError(validation.message ?? 'Saved partner ID is no longer valid.');
-      return;
-    }
-
-    setIsPaired(true);
+    const partnerUid = await StorageService.getPartnerUid();
+    setIsPaired(!!partner && !!partnerUid);
   };
 
   const [partnerStatus, setPartnerStatus] = useState<'online' | 'locked' | 'sos' | 'away'>('away');
@@ -133,7 +116,7 @@ export default function App() {
       }
 
       if (partnerId) {
-        statusUnsub = FirebaseService.subscribeToPartner(partnerId, (data) => {
+        statusUnsub = await FirebaseService.subscribeToPartner((data) => {
           if (!active) return;
           if (data && data.state) {
             setPartnerStatus(data.state);
@@ -148,6 +131,7 @@ export default function App() {
       nudgeUnsub = await FirebaseService.subscribeToNudges(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setLastNudgeDate(new Date());
+        Alert.alert('Pulse Received', 'Your partner sent a nudge.');
       });
     };
 
